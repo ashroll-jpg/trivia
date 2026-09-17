@@ -1,0 +1,37 @@
+{
+  "days": {
+    "2026-09-15": {
+      "date": "2026-09-15",
+      "results": [
+        {"type":"multiple","difficulty":"easy","category":"Geography","question":"What is the capital of France?","correct_answer":"Paris","incorrect_answers":["London","Berlin","Madrid"]},
+        {"type":"multiple","difficulty":"easy","category":"General Knowledge","question":"How many days are there in a week?","correct_answer":"Seven","incorrect_answers":["Five","Six","Eight"]},
+        {"type":"multiple","difficulty":"easy","category":"Science: Nature","question":"Which planet is known as the Red Planet?","correct_answer":"Mars","incorrect_answers":["Venus","Jupiter","Saturn"]},
+        {"type":"multiple","difficulty":"medium","category":"Geography","question":"In which country would you find the Great Barrier Reef?","correct_answer":"Australia","incorrect_answers":["Brazil","Thailand","Mexico"]},
+        {"type":"multiple","difficulty":"medium","category":"Art","question":"Who painted the Mona Lisa?","correct_answer":"Leonardo da Vinci","incorrect_answers":["Michelangelo","Raphael","Vincent van Gogh"]},
+        {"type":"multiple","difficulty":"hard","category":"Science","question":"What is the chemical symbol for the element tungsten?","correct_answer":"W","incorrect_answers":["Tu","Tg","Tn"]}
+      ]
+    },
+    "2026-09-16": {
+      "date": "2026-09-16",
+      "results": [
+        {"type":"multiple","difficulty":"easy","category":"Art","question":"What color do you get by mixing blue and yellow?","correct_answer":"Green","incorrect_answers":["Purple","Orange","Brown"]},
+        {"type":"multiple","difficulty":"easy","category":"Science: Nature","question":"How many legs does a spider have?","correct_answer":"Eight","incorrect_answers":["Six","Ten","Four"]},
+        {"type":"multiple","difficulty":"easy","category":"Geography","question":"What is the largest ocean on Earth?","correct_answer":"Pacific Ocean","incorrect_answers":["Atlantic Ocean","Indian Ocean","Arctic Ocean"]},
+        {"type":"multiple","difficulty":"medium","category":"Entertainment: Music","question":"Which artist recorded the 1982 album Thriller?","correct_answer":"Michael Jackson","incorrect_answers":["Prince","Stevie Wonder","Lionel Richie"]},
+        {"type":"multiple","difficulty":"medium","category":"Mythology","question":"In Greek mythology, who is the king of the gods?","correct_answer":"Zeus","incorrect_answers":["Poseidon","Hades","Apollo"]},
+        {"type":"multiple","difficulty":"hard","category":"History","question":"In what year did the Berlin Wall fall?","correct_answer":"1989","incorrect_answers":["1987","1991","1985"]}
+      ]
+    },
+    "2026-09-17": {
+      "date": "2026-09-17",
+      "results": [
+        {"type":"multiple","difficulty":"easy","category":"Science: Nature","question":"Which animal is commonly known as the King of the Jungle?","correct_answer":"Lion","incorrect_answers":["Tiger","Elephant","Gorilla"]},
+        {"type":"multiple","difficulty":"easy","category":"Geography","question":"How many continents are there on Earth?","correct_answer":"Seven","incorrect_answers":["Five","Six","Eight"]},
+        {"type":"multiple","difficulty":"easy","category":"Science","question":"What is the freezing point of water in degrees Celsius?","correct_answer":"0","incorrect_answers":["32","100","10"]},
+        {"type":"multiple","difficulty":"medium","category":"Sports","question":"Which country hosted the 2016 Summer Olympics?","correct_answer":"Brazil","incorrect_answers":["China","United Kingdom","Japan"]},
+        {"type":"multiple","difficulty":"medium","category":"Entertainment: Books","question":"Who wrote the play Romeo and Juliet?","correct_answer":"William Shakespeare","incorrect_answers":["Charles Dickens","Jane Austen","Mark Twain"]},
+        {"type":"multiple","difficulty":"hard","category":"Science: Mathematics","question":"What is the smallest prime number?","correct_answer":"2","incorrect_answers":["1","3","0"]}
+      ]
+    }
+  }
+}
