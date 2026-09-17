@@ -170,6 +170,16 @@
   .btn.copied{background:var(--got); border-color:var(--got); color:#fff; box-shadow:0 4px 0 #0c7a4f}
   .countdown{color:var(--muted); font-size:13px; margin-top:16px; font-variant-numeric:tabular-nums; font-weight:800}
   .countdown b{color:var(--text)}
+
+  /* Archive */
+  .backbtn{appearance:none; border:0; background:transparent; font-family:var(--display); font-size:30px; line-height:1; color:var(--text); cursor:pointer; padding:0 6px 4px 0; -webkit-tap-highlight-color:transparent}
+  .archive{flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:10px 0 20px}
+  .archive-row{display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; text-align:left; font-family:var(--body); font-weight:800; font-size:16px; color:var(--text); background:var(--surface); border:2px solid var(--line); border-radius:14px; padding:14px 16px; min-height:56px; cursor:pointer; box-shadow:0 3px 0 var(--line); transition:transform .05s, box-shadow .05s; -webkit-tap-highlight-color:transparent}
+  .archive-row:active{transform:translateY(3px); box-shadow:none}
+  .archive-row:hover{border-color:var(--brain)}
+  .ar-status{font-family:var(--display); color:var(--muted); font-size:15px; white-space:nowrap}
+  .ar-status.done{color:var(--got)}
+  .archive-empty{color:var(--muted); text-align:center; margin-top:48px; padding:0 20px; font-weight:800}
 </style>
 </head>
 <body>
@@ -228,6 +238,14 @@
     </div>
   </section>
 
+  <section class="screen" id="s-archive">
+    <div class="topbar">
+      <button class="backbtn" onclick="backToToday()" aria-label="Back">&lsaquo;</button>
+      <div class="brandmini"><span>PAST DAYS</span></div>
+    </div>
+    <div class="archive" id="archiveList"></div>
+  </section>
+
 </div>
 
 <script>
@@ -235,18 +253,20 @@
    DON'T SKIP BRAIN DAY
    Live questions from the free Open Trivia Database (opentdb.com).
 
-   Shared team daily (optional):
-   If a daily.json sits next to this file (produced by the included GitHub
-   Action), everyone gets the SAME questions that day. If it's missing or
-   stale, the app quietly falls back to fetching a fresh set per-person.
+   Shared team daily + archive:
+   The GitHub Action writes each day's set to archive.json. The app reads it
+   for today's set AND for the "Past days" list, so anyone can go back and
+   play days they missed. If archive.json is missing, the app falls back to a
+   fresh per-person set (still 3 easy / 2 medium / 1 hard).
 
    Tunables:
-   - DAILY_COUNT : questions per round (match this in fetch-daily.js)
-   - Bias category/difficulty by appending to API_BASE, e.g.
-       &category=9   (General Knowledge)   &difficulty=medium
-     Category IDs: https://opentdb.com/api_config.php
+   - MIX : the daily difficulty mix (also set the same MIX in fetch-daily.js)
+   - PRACTICE_COUNT : questions in an "Extra set" (mixed difficulty)
+   - Bias category by appending to API_BASE, e.g. &category=9 (General
+     Knowledge). Category IDs: https://opentdb.com/api_config.php
    ========================================================================= */
-const DAILY_COUNT = 5;
+const MIX = [["easy", 3], ["medium", 2], ["hard", 1]]; // 6 questions, ramping up
+const PRACTICE_COUNT = 6;
 const API_BASE = "https://opentdb.com/api.php?type=multiple&encode=url3986";
 
 /* ---------- storage ---------- */
@@ -260,7 +280,8 @@ const now = new Date();
 const ymd = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 const parseYmd = s => { const p=s.split("-").map(Number); return new Date(p[0],p[1]-1,p[2]); };
 const todayKey = ymd(now);
-let currentDayId = todayKey, sharedMode = false;
+let currentDayId = todayKey, latestDayId = todayKey, sharedMode = false;
+let archiveDays = {}; // date -> { date, results:[raw opentdb results] }
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const el = id => document.getElementById(id);
 const decode = s => { try { return decodeURIComponent(s); } catch(e){ return s; } };
@@ -438,16 +459,16 @@ async function ensureToken(){
   return null;
 }
 async function resetToken(){ if(!store.token) return; try{ await apiGet("https://opentdb.com/api_token.php?command=reset&token="+store.token); }catch(e){} }
-async function fetchResults(n, attempt){
+async function fetchResults(n, difficulty, attempt){
   attempt=attempt||0;
   const token=await ensureToken();
-  const d=await apiGet(API_BASE+"&amount="+n+(token?"&token="+token:""));
+  const d=await apiGet(API_BASE+"&amount="+n+(difficulty?"&difficulty="+difficulty:"")+(token?"&token="+token:""));
   switch(d.response_code){
     case 0: return d.results;
-    case 3: store.token=null; save(); if(attempt<2) return fetchResults(n,attempt+1); break;
-    case 4: await resetToken(); if(attempt<2) return fetchResults(n,attempt+1); break;
-    case 5: if(attempt<3){ await sleep(5200); return fetchResults(n,attempt+1); } break;
-    case 1: if(token && attempt<2){ store.token=null; save(); return fetchResults(n,attempt+1); } break;
+    case 3: store.token=null; save(); if(attempt<2) return fetchResults(n,difficulty,attempt+1); break;
+    case 4: await resetToken(); if(attempt<2) return fetchResults(n,difficulty,attempt+1); break;
+    case 5: if(attempt<3){ await sleep(5200); return fetchResults(n,difficulty,attempt+1); } break;
+    case 1: if(token && attempt<2){ store.token=null; save(); return fetchResults(n,difficulty,attempt+1); } break;
   }
   throw new Error("opentdb code "+d.response_code);
 }
@@ -459,21 +480,22 @@ function normalize(results){
                cat:shortCat(decode(r.category)), difficulty:r.difficulty }; });
 }
 async function getQuestions(n){ const qs=normalize(await fetchResults(n)); if(qs.length<1) throw new Error("empty"); return qs; }
+/* 3 easy + 2 medium + 1 hard, in ramping order (raw results) */
+async function fetchMix(){
+  let all=[];
+  for(const g of MIX){ all=all.concat(await fetchResults(g[1], g[0])); }
+  return all;
+}
 
-/* Prefer shared daily.json; fall back to a per-person fetch cached for the day */
-async function loadDaily(){
+/* Load the shared archive (every day's questions). Falls back to null. */
+async function loadArchive(){
   try{
-    const r=await fetch("./daily.json?ts="+Date.now(),{cache:"no-store"});
+    const r=await fetch("./archive.json?ts="+Date.now(),{cache:"no-store"});
     if(r.ok){ const j=await r.json();
-      if(j && j.date && Array.isArray(j.results) && j.results.length){
-        const qs=normalize(j.results); if(qs.length) return {dayId:j.date, qs, shared:true};
-      }
+      if(j && j.days && Object.keys(j.days).length) return j.days;
     }
   }catch(e){}
-  if(store.cache && store.cache.date===todayKey && Array.isArray(store.cache.q) && store.cache.q.length)
-    return {dayId:todayKey, qs:store.cache.q, shared:false};
-  const qs=await getQuestions(DAILY_COUNT); store.cache={date:todayKey,q:qs}; save();
-  return {dayId:todayKey, qs, shared:false};
+  return null;
 }
 
 /* =========================================================================
@@ -540,8 +562,9 @@ function advanceTrans(){ if(transTimer){ clearTimeout(transTimer); transTimer=nu
 /* =========================================================================
    Results
    ========================================================================= */
+const fmtShort = id => parseYmd(id).toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
 function currentStreak(){
-  let d=parseYmd(currentDayId);
+  let d=parseYmd(latestDayId||todayKey);
   if(!(store.days[ymd(d)] && store.days[ymd(d)].done)) d.setDate(d.getDate()-1);
   let n=0; while(store.days[ymd(d)] && store.days[ymd(d)].done){ n++; d.setDate(d.getDate()-1); }
   return n;
@@ -561,8 +584,9 @@ function verdict(g,t){ const p=g/t;
 let countdownTimer=null;
 function showResults(rec, daily){
   const g=rec.score, t=rec.total, ratio=g/t;
+  const isToday = currentDayId===latestDayId;
   el("rIll").innerHTML = ratio>=0.6 ? illWin() : illRest();
-  el("rEyebrow").textContent = daily ? "TODAY'S WORKOUT" : "EXTRA SET";
+  el("rEyebrow").textContent = !daily ? "EXTRA SET" : (isToday ? "TODAY'S WORKOUT" : fmtShort(currentDayId).toUpperCase());
   el("rScore").innerHTML=g+'<span class="of"> / '+t+'</span>';
   el("rScore").style.color = ratio>=0.6 ? "var(--got)" : (ratio>=0.4 ? "var(--brain-2)" : "var(--missed)");
   el("rVerdict").textContent=verdict(g,t);
@@ -574,9 +598,12 @@ function showResults(rec, daily){
   const actions=el("rActions"); actions.innerHTML="";
   const shareBtn=make("button","btn primary","SHARE YOUR GAINS");
   shareBtn.onclick=()=>shareResult(g,t,rec.results,shareBtn); actions.appendChild(shareBtn);
+  if(Object.keys(archiveDays).length){
+    const pastBtn=make("button","btn ghost","PAST DAYS"); pastBtn.onclick=openArchive; actions.appendChild(pastBtn);
+  }
   const practiceBtn=make("button","btn ghost","EXTRA SET"); practiceBtn.onclick=startPractice; actions.appendChild(practiceBtn);
   const cd=el("rCountdown");
-  if(daily && !sharedMode){
+  if(daily && isToday && !sharedMode){
     cd.style.display="";
     if(countdownTimer) clearInterval(countdownTimer);
     const tick=()=>{ const mid=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1,0,0,0);
@@ -585,9 +612,42 @@ function showResults(rec, daily){
       const m=String(Math.floor(s/60)).padStart(2,"0"), ss=String(s%60).padStart(2,"0");
       cd.innerHTML="Next brain day in <b>"+h+":"+m+":"+ss+"</b>"; };
     tick(); countdownTimer=setInterval(tick,1000);
-  } else if(daily){ cd.style.display=""; cd.innerHTML="New brain day drops daily \u2014 come back tomorrow."; }
+  } else if(daily && isToday){ cd.style.display=""; cd.innerHTML="New brain day drops daily \u2014 come back tomorrow."; }
   else cd.style.display="none";
   show("s-result");
+}
+
+/* ---------- archive (play days you missed) ---------- */
+function openArchive(){
+  const list=el("archiveList"); list.innerHTML="";
+  const dates=Object.keys(archiveDays).sort().reverse();
+  if(!dates.length){
+    list.innerHTML='<p class="archive-empty">Past days show up here once your daily archive has a few entries.</p>';
+  } else {
+    dates.forEach(d=>{
+      const rec=store.days[d];
+      const row=make("button","archive-row");
+      row.appendChild(make("div","ar-date", fmtShort(d) + (d===latestDayId?"  \u00b7 today":"")));
+      const right=make("div","ar-status");
+      if(rec && rec.done){ right.textContent=rec.score+"/"+rec.total+" \u2713"; right.classList.add("done"); }
+      else { right.textContent="Play \u203A"; }
+      row.appendChild(right);
+      row.onclick=()=>playDay(d);
+      list.appendChild(row);
+    });
+  }
+  show("s-archive");
+}
+function playDay(d){
+  currentDayId=d;
+  if(store.days[d] && store.days[d].done){ showResults(store.days[d], true); return; }
+  const day=archiveDays[d]; if(!day) return;
+  beginRound(normalize(day.results), true);
+}
+function backToToday(){
+  currentDayId=latestDayId;
+  if(store.days[latestDayId] && store.days[latestDayId].done){ showResults(store.days[latestDayId], true); }
+  else startDaily();
 }
 async function shareResult(g,t,res,btn){
   const squares=res.map(r=>r?"\uD83D\uDFE9":"\uD83D\uDFE5").join("");
@@ -606,14 +666,27 @@ function loadingMsg(){ el("loadingMsg").textContent=pick(LOADING); el("loadIll")
 let lastFlow=null;
 async function startDaily(){
   lastFlow=startDaily; loadingMsg(); show("s-loading");
-  try{ const d=await loadDaily(); currentDayId=d.dayId; sharedMode=d.shared;
-    if(store.days[d.dayId] && store.days[d.dayId].done){ showResults(store.days[d.dayId],true); return; }
-    beginRound(d.qs,true);
+  try{
+    const days=await loadArchive();
+    if(days){
+      archiveDays=days; sharedMode=true;
+      const dates=Object.keys(days).sort();
+      latestDayId=dates[dates.length-1]; currentDayId=latestDayId;
+      if(store.days[latestDayId] && store.days[latestDayId].done){ showResults(store.days[latestDayId],true); return; }
+      beginRound(normalize(days[latestDayId].results), true); return;
+    }
+    // Fallback: per-person daily (3 easy / 2 medium / 1 hard), cached for the day
+    archiveDays={}; sharedMode=false; latestDayId=todayKey; currentDayId=todayKey;
+    if(store.days[todayKey] && store.days[todayKey].done){ showResults(store.days[todayKey],true); return; }
+    if(store.cache && store.cache.date===todayKey && Array.isArray(store.cache.q) && store.cache.q.length){ beginRound(store.cache.q,true); return; }
+    const qs=normalize(await fetchMix()); if(!qs.length) throw new Error("empty");
+    store.cache={date:todayKey,q:qs}; save();
+    beginRound(qs,true);
   }catch(e){ showError(); }
 }
 async function startPractice(){
   lastFlow=startPractice; loadingMsg(); show("s-loading");
-  try{ beginRound(await getQuestions(DAILY_COUNT), false); }
+  try{ beginRound(await getQuestions(PRACTICE_COUNT), false); }
   catch(e){ showError(); }
 }
 function retry(){ (lastFlow||startDaily)(); }
