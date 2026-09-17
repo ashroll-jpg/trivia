@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#F5F3FB">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Brain Day">
 <title>Don't Skip Brain Day</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -182,7 +187,7 @@
     <div class="center">
       <div id="errIll"></div>
       <div class="big">THE GYM&rsquo;S CLOSED</div>
-      <p>Couldn&rsquo;t load today&rsquo;s workout. Check your connection and give it another go.</p>
+      <p id="errMsg">Couldn&rsquo;t load today&rsquo;s workout. Check your connection and give it another go.</p>
       <button class="btn primary" style="max-width:230px" onclick="retry()">TRY AGAIN</button>
     </div>
   </section>
@@ -603,14 +608,26 @@ async function startDaily(){
   try{ const d=await loadDaily(); currentDayId=d.dayId; sharedMode=d.shared;
     if(store.days[d.dayId] && store.days[d.dayId].done){ showResults(store.days[d.dayId],true); return; }
     beginRound(d.qs,true);
-  }catch(e){ el("errIll").innerHTML=illShrug(); show("s-error"); }
+  }catch(e){ showError(); }
 }
 async function startPractice(){
   lastFlow=startPractice; loadingMsg(); show("s-loading");
   try{ beginRound(await getQuestions(DAILY_COUNT), false); }
-  catch(e){ el("errIll").innerHTML=illShrug(); show("s-error"); }
+  catch(e){ showError(); }
 }
 function retry(){ (lastFlow||startDaily)(); }
+function showError(){
+  el("errIll").innerHTML=illShrug();
+  el("errMsg").textContent = navigator.onLine
+    ? "Couldn't load today's workout. Check your connection and give it another go."
+    : "You're offline. Reconnect to load today's workout \u2014 your streak is safe.";
+  show("s-error");
+}
+
+/* Offline support + always-newest shell */
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
+}
 
 startDaily();
 </script>
