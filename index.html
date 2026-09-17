@@ -490,6 +490,7 @@ function renderSegs(){ const s=el("segs"); s.innerHTML=""; for(let i=0;i<roundQs
 function paintSegs(){ document.querySelectorAll("#segs .seg").forEach((s,i)=>{ s.className="seg";
   if(i<results.length) s.classList.add(results[i]?"got":"missed"); else if(i===idx) s.classList.add("cur"); }); }
 function renderQuestion(){
+  show("s-play");
   answered=false; const cur=roundQs[idx];
   el("runscore").textContent="\u2713 "+score;
   el("chipCat").textContent=cur.cat;
