@@ -1,1 +1,27 @@
+# Put this file at: .github/workflows/daily.yml
+name: Daily Brain Day questions
 
+on:
+  schedule:
+    - cron: "15 9 * * *"   # 09:15 UTC (~5:15am US Eastern). Adjust to taste.
+  workflow_dispatch:         # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch today's questions
+        run: node fetch-daily.js
+
+      - name: Commit daily.json if it changed
+        run: |
+          git config user.name "brain-day-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add daily.json
+          git commit -m "Daily questions" || echo "No changes to commit"
+          git push
