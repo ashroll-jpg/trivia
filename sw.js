@@ -3,7 +3,6 @@
 
    Strategy:
    - App document  -> NETWORK-FIRST (newest wins online; cached copy offline)
-   - archive.json  -> NETWORK-FIRST (freshest question archive; last one offline)
    - Google Fonts  -> stale-while-revalidate (fast + offline after first load)
    - icons/manifest-> cache-first
    - opentdb API   -> pass through (network only; not cached)
@@ -12,14 +11,13 @@
    immediately. Bump VERSION below only if you change this file or want to
    force old caches to be cleared.
 */
-const VERSION = "brainday-v2";
+const VERSION = "brainday-v3";
 const CORE = ["./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
     const c = await caches.open(VERSION);
     await c.addAll(CORE);
-    try { await c.add("./archive.json"); } catch (_) {}   // optional; fine if absent
     self.skipWaiting();
   })());
 });
@@ -55,20 +53,6 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Question archive — network-first, last-known copy offline
-  if (url.origin === location.origin && url.pathname.endsWith("/archive.json")) {
-    e.respondWith((async () => {
-      const c = await caches.open(VERSION);
-      try {
-        const net = await fetch(req, { cache: "no-store" });
-        c.put("./archive.json", net.clone());
-        return net;
-      } catch (_) {
-        return (await c.match("./archive.json")) || Response.error();
-      }
-    })());
-    return;
-  }
 
   // Google Fonts — stale-while-revalidate
   if (isFont(url)) {

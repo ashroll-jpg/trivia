@@ -251,23 +251,18 @@
 <script>
 /* =========================================================================
    DON'T SKIP BRAIN DAY
-   Live questions from the free Open Trivia Database (opentdb.com).
+   Fully self-contained: every day's 6-question set (3 easy, 2 medium, 1 hard)
+   is generated from the built-in question bank using the calendar date. No
+   server, no API, no internet needed once the page has loaded — and because
+   the set is derived from the date, everyone on the team gets the SAME daily
+   automatically, and "Past Days" can recompute any day back to ARCHIVE_START.
 
-   Shared team daily + archive:
-   The GitHub Action writes each day's set to archive.json. The app reads it
-   for today's set AND for the "Past days" list, so anyone can go back and
-   play days they missed. If archive.json is missing, the app falls back to a
-   fresh per-person set (still 3 easy / 2 medium / 1 hard).
-
-   Tunables:
-   - MIX : the daily difficulty mix (also set the same MIX in fetch-daily.js)
-   - PRACTICE_COUNT : questions in an "Extra set" (mixed difficulty)
-   - Bias category by appending to API_BASE, e.g. &category=9 (General
-     Knowledge). Category IDs: https://opentdb.com/api_config.php
+   To add/edit questions: edit the BANK object below (easy / medium / hard).
+   Each entry is { q, a, w:[wrong,wrong,wrong], cat }.
    ========================================================================= */
-const MIX = [["easy", 3], ["medium", 2], ["hard", 1]]; // 6 questions, ramping up
-const PRACTICE_COUNT = 6;
-const API_BASE = "https://opentdb.com/api.php?type=multiple&encode=url3986";
+const EPOCH = new Date(2026, 0, 1);        // day 0 for the daily sequence
+const ARCHIVE_START = "2026-09-15";        // earliest day shown under "Past Days"
+const ARCHIVE_MAX_ROWS = 180;              // how many past days to list
 
 /* ---------- storage ---------- */
 const KEY = "brainday_v1";
@@ -280,17 +275,16 @@ const now = new Date();
 const ymd = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 const parseYmd = s => { const p=s.split("-").map(Number); return new Date(p[0],p[1]-1,p[2]); };
 const todayKey = ymd(now);
-let currentDayId = todayKey, latestDayId = todayKey, sharedMode = false;
-let archiveDays = {}; // date -> { date, results:[raw opentdb results] }
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
+let currentDayId = todayKey, latestDayId = todayKey;
 const el = id => document.getElementById(id);
-const decode = s => { try { return decodeURIComponent(s); } catch(e){ return s; } };
 const shuffle = a => { a=a.slice(); for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]];} return a; };
 const pick = a => a[Math.random()*a.length|0];
-const shortCat = c => { const i=c.indexOf(":"); return i>=0 ? c.slice(i+1).trim() : c; };
 const make = (tag,cls,txt) => { const e=document.createElement(tag); e.className=cls; if(txt!=null) e.textContent=txt; return e; };
 const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active")); el(id).classList.add("active"); }
+const fmtShort = id => parseYmd(id).toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+const dayNumOf = id => Math.round((parseYmd(id) - EPOCH)/86400000);
+const dayIdOf = n => ymd(new Date(EPOCH.getFullYear(), EPOCH.getMonth(), EPOCH.getDate()+n));
 
 /* =========================================================================
    ILLUSTRATIONS — a cartoon brain that lifts
@@ -449,53 +443,30 @@ const ALL_ILLS = [illPress, illCurl, illRun, illSquat, illRope, illKettle, illJa
 let roundIlls = ALL_ILLS.slice();
 
 /* =========================================================================
-   API (Open Trivia DB)
+   QUESTION BANK + daily builder
    ========================================================================= */
-async function apiGet(url){ const r = await fetch(url); if(!r.ok) throw new Error("http "+r.status); return r.json(); }
-async function ensureToken(){
-  if(store.token) return store.token;
-  try{ const d = await apiGet("https://opentdb.com/api_token.php?command=request");
-    if(d.response_code===0 && d.token){ store.token=d.token; save(); return d.token; } }catch(e){}
-  return null;
-}
-async function resetToken(){ if(!store.token) return; try{ await apiGet("https://opentdb.com/api_token.php?command=reset&token="+store.token); }catch(e){} }
-async function fetchResults(n, difficulty, attempt){
-  attempt=attempt||0;
-  const token=await ensureToken();
-  const d=await apiGet(API_BASE+"&amount="+n+(difficulty?"&difficulty="+difficulty:"")+(token?"&token="+token:""));
-  switch(d.response_code){
-    case 0: return d.results;
-    case 3: store.token=null; save(); if(attempt<2) return fetchResults(n,difficulty,attempt+1); break;
-    case 4: await resetToken(); if(attempt<2) return fetchResults(n,difficulty,attempt+1); break;
-    case 5: if(attempt<3){ await sleep(5200); return fetchResults(n,difficulty,attempt+1); } break;
-    case 1: if(token && attempt<2){ store.token=null; save(); return fetchResults(n,difficulty,attempt+1); } break;
-  }
-  throw new Error("opentdb code "+d.response_code);
-}
-function normalize(results){
-  return (results||[])
-    .filter(r=>r && r.correct_answer && Array.isArray(r.incorrect_answers) && r.incorrect_answers.length>=3)
-    .map(r=>{ const correct=decode(r.correct_answer);
-      return { q:decode(r.question), correct, choices:shuffle([correct].concat(r.incorrect_answers.map(decode))),
-               cat:shortCat(decode(r.category)), difficulty:r.difficulty }; });
-}
-async function getQuestions(n){ const qs=normalize(await fetchResults(n)); if(qs.length<1) throw new Error("empty"); return qs; }
-/* 3 easy + 2 medium + 1 hard, in ramping order (raw results) */
-async function fetchMix(){
-  let all=[];
-  for(const g of MIX){ all=all.concat(await fetchResults(g[1], g[0])); }
-  return all;
-}
+const BANK = {"easy":[{"q":"Which metal is liquid at room temperature?","a":"Mercury","w":["Iron","Copper","Gold"],"cat":"Science"},{"q":"How many legs does an insect have?","a":"Six","w":["Four","Eight","Ten"],"cat":"Nature"},{"q":"What is the freezing point of water in degrees Celsius?","a":"0","w":["32","100","10"],"cat":"Science"},{"q":"Which is the largest planet in our solar system?","a":"Jupiter","w":["Saturn","Neptune","Earth"],"cat":"Science"},{"q":"How many minutes are in an hour?","a":"60","w":["30","90","100"],"cat":"General Knowledge"},{"q":"How many days are there in a week?","a":"Seven","w":["Five","Six","Eight"],"cat":"General Knowledge"},{"q":"What do bees primarily produce?","a":"Honey","w":["Milk","Silk","Jam"],"cat":"Nature"},{"q":"What is the largest mammal on Earth?","a":"Blue whale","w":["Elephant","Giraffe","Hippopotamus"],"cat":"Nature"},{"q":"What is the tallest land animal?","a":"Giraffe","w":["Elephant","Horse","Camel"],"cat":"Nature"},{"q":"What is the opposite direction of north?","a":"South","w":["East","West","Up"],"cat":"Geography"},{"q":"What is the hardest naturally occurring substance on Earth?","a":"Diamond","w":["Gold","Iron","Quartz"],"cat":"Science"},{"q":"What is the largest ocean on Earth?","a":"Pacific Ocean","w":["Atlantic Ocean","Indian Ocean","Arctic Ocean"],"cat":"Geography"},{"q":"How many colors are traditionally in a rainbow?","a":"Seven","w":["Five","Six","Eight"],"cat":"General Knowledge"},{"q":"What is the largest continent by area?","a":"Asia","w":["Africa","Europe","Antarctica"],"cat":"Geography"},{"q":"Who wrote the Harry Potter series?","a":"J.K. Rowling","w":["Roald Dahl","C.S. Lewis","Philip Pullman"],"cat":"Literature"},{"q":"Which shape has four equal sides?","a":"Square","w":["Triangle","Circle","Pentagon"],"cat":"Mathematics"},{"q":"What gas do humans need to breathe in to survive?","a":"Oxygen","w":["Carbon dioxide","Nitrogen","Hydrogen"],"cat":"Nature"},{"q":"How many strings does a standard guitar have?","a":"Six","w":["Four","Five","Seven"],"cat":"Music"},{"q":"How many hours are there in a day?","a":"24","w":["12","48","20"],"cat":"General Knowledge"},{"q":"Which country is famously shaped like a boot?","a":"Italy","w":["Spain","Greece","Portugal"],"cat":"Geography"},{"q":"What is H2O more commonly known as?","a":"Water","w":["Salt","Oxygen","Hydrogen"],"cat":"Science"},{"q":"Which season is typically the coldest?","a":"Winter","w":["Summer","Spring","Autumn"],"cat":"Nature"},{"q":"Which animal is famous for changing the color of its skin?","a":"Chameleon","w":["Iguana","Gecko","Turtle"],"cat":"Nature"},{"q":"What is the capital of Germany?","a":"Berlin","w":["Munich","Frankfurt","Hamburg"],"cat":"Geography"},{"q":"What is the capital of the United States?","a":"Washington, D.C.","w":["New York City","Los Angeles","Chicago"],"cat":"Geography"},{"q":"What is the primary language spoken in Mexico?","a":"Spanish","w":["Portuguese","French","Italian"],"cat":"Geography"},{"q":"Who wrote the play Romeo and Juliet?","a":"William Shakespeare","w":["Charles Dickens","Mark Twain","Jane Austen"],"cat":"Literature"},{"q":"What is the capital of Spain?","a":"Madrid","w":["Barcelona","Seville","Valencia"],"cat":"Geography"},{"q":"What is the capital of Russia?","a":"Moscow","w":["St. Petersburg","Kyiv","Minsk"],"cat":"Geography"},{"q":"Which sport is played with a bat, a ball, and bases?","a":"Baseball","w":["Basketball","Soccer","Tennis"],"cat":"Sports"},{"q":"What is the chemical symbol for gold?","a":"Au","w":["Ag","Gd","Go"],"cat":"Science"},{"q":"What is the capital of Canada?","a":"Ottawa","w":["Toronto","Vancouver","Montreal"],"cat":"Geography"},{"q":"What is the currency of the United Kingdom?","a":"Pound sterling","w":["Euro","Dollar","Franc"],"cat":"Geography"},{"q":"What is the capital of Italy?","a":"Rome","w":["Milan","Venice","Naples"],"cat":"Geography"},{"q":"What do you call a baby dog?","a":"Puppy","w":["Kitten","Cub","Calf"],"cat":"Nature"},{"q":"Which gas do plants mainly take in from the air?","a":"Carbon dioxide","w":["Oxygen","Nitrogen","Helium"],"cat":"Nature"},{"q":"Which planet is closest to the Sun?","a":"Mercury","w":["Venus","Earth","Mars"],"cat":"Science"},{"q":"How many legs does a spider have?","a":"Eight","w":["Six","Four","Ten"],"cat":"Nature"},{"q":"Which planet is nicknamed the Blue Planet?","a":"Earth","w":["Neptune","Uranus","Mars"],"cat":"Science"},{"q":"Which hopping marsupial is a well-known symbol of Australia?","a":"Kangaroo","w":["Koala","Wombat","Possum"],"cat":"Nature"},{"q":"How many colors does a standard traffic light have?","a":"Three","w":["Two","Four","Five"],"cat":"General Knowledge"},{"q":"What is the tallest mountain on Earth?","a":"Mount Everest","w":["K2","Denali","Kilimanjaro"],"cat":"Geography"},{"q":"What is 100 divided by 4?","a":"25","w":["20","30","40"],"cat":"Mathematics"},{"q":"Which planet do we live on?","a":"Earth","w":["Mars","Venus","Jupiter"],"cat":"Science"},{"q":"Which shape has no sides or corners?","a":"Circle","w":["Square","Triangle","Hexagon"],"cat":"Mathematics"},{"q":"What is the name of the galaxy we live in?","a":"The Milky Way","w":["Andromeda","The Solar System","The Big Dipper"],"cat":"Science"},{"q":"What is the capital of France?","a":"Paris","w":["London","Rome","Madrid"],"cat":"Geography"},{"q":"What color do you get by mixing blue and yellow?","a":"Green","w":["Purple","Orange","Brown"],"cat":"Art"},{"q":"Which planet is known as the Red Planet?","a":"Mars","w":["Venus","Jupiter","Mercury"],"cat":"Science"},{"q":"What is 5 times 5?","a":"25","w":["10","20","30"],"cat":"Mathematics"},{"q":"What is the largest country in the world by area?","a":"Russia","w":["Canada","China","United States"],"cat":"Geography"},{"q":"Who is known as the King of Rock and Roll?","a":"Elvis Presley","w":["Michael Jackson","Chuck Berry","Little Richard"],"cat":"Music"},{"q":"Which US state is nicknamed the Sunshine State?","a":"Florida","w":["California","Texas","Arizona"],"cat":"Geography"},{"q":"Which animal is commonly called the King of the Jungle?","a":"Lion","w":["Tiger","Elephant","Bear"],"cat":"Nature"},{"q":"How many teeth does a typical adult human have?","a":"32","w":["28","30","36"],"cat":"Science"},{"q":"Which planet is famous for its prominent rings?","a":"Saturn","w":["Mars","Venus","Mercury"],"cat":"Science"},{"q":"Which ocean lies between the Americas and Europe?","a":"Atlantic Ocean","w":["Pacific Ocean","Indian Ocean","Arctic Ocean"],"cat":"Geography"},{"q":"How many sides does a triangle have?","a":"Three","w":["Four","Five","Two"],"cat":"Mathematics"},{"q":"Which planet is the hottest in our solar system?","a":"Venus","w":["Mercury","Mars","Jupiter"],"cat":"Science"},{"q":"How many months of the year have 31 days?","a":"Seven","w":["Five","Six","Eight"],"cat":"General Knowledge"},{"q":"Which of these birds cannot fly?","a":"Penguin","w":["Eagle","Sparrow","Robin"],"cat":"Nature"},{"q":"Who was the first President of the United States?","a":"George Washington","w":["Abraham Lincoln","Thomas Jefferson","John Adams"],"cat":"History"},{"q":"How many continents are there on Earth?","a":"Seven","w":["Five","Six","Eight"],"cat":"Geography"},{"q":"Which instrument has both black and white keys?","a":"Piano","w":["Violin","Guitar","Trumpet"],"cat":"Music"},{"q":"What is the largest organ of the human body?","a":"Skin","w":["Liver","Heart","Lungs"],"cat":"Science"},{"q":"What is the fastest land animal?","a":"Cheetah","w":["Lion","Horse","Leopard"],"cat":"Nature"},{"q":"Which is the smallest ocean on Earth?","a":"Arctic Ocean","w":["Indian Ocean","Atlantic Ocean","Southern Ocean"],"cat":"Geography"},{"q":"In which country is the Eiffel Tower located?","a":"France","w":["Italy","Spain","Germany"],"cat":"Geography"},{"q":"Which of these animals barks?","a":"Dog","w":["Cat","Cow","Sheep"],"cat":"Nature"},{"q":"Which of these is a primary color?","a":"Red","w":["Green","Orange","Purple"],"cat":"Art"},{"q":"What is frozen water called?","a":"Ice","w":["Steam","Mist","Vapor"],"cat":"Science"},{"q":"What is the capital of Japan?","a":"Tokyo","w":["Kyoto","Osaka","Seoul"],"cat":"Geography"},{"q":"How many wheels does a typical car have?","a":"Four","w":["Two","Three","Six"],"cat":"General Knowledge"},{"q":"What is the currency of Japan?","a":"Yen","w":["Won","Yuan","Ringgit"],"cat":"Geography"},{"q":"What is the chemical symbol for oxygen?","a":"O","w":["Ox","O2","Og"],"cat":"Science"},{"q":"How many players from one team are on a soccer field at a time?","a":"Eleven","w":["Nine","Ten","Twelve"],"cat":"Sports"},{"q":"What is the capital of England?","a":"London","w":["Manchester","Liverpool","Birmingham"],"cat":"Geography"},{"q":"What do caterpillars turn into?","a":"Butterflies","w":["Beetles","Spiders","Bees"],"cat":"Nature"}],"medium":[{"q":"Which artist painted Guernica?","a":"Pablo Picasso","w":["Salvador Dali","Henri Matisse","Joan Miro"],"cat":"Art"},{"q":"What is the main ingredient in traditional guacamole?","a":"Avocado","w":["Tomato","Cucumber","Zucchini"],"cat":"Food"},{"q":"What is the scientific study of living organisms called?","a":"Biology","w":["Geology","Chemistry","Physics"],"cat":"Science"},{"q":"In which sport would you perform a slam dunk?","a":"Basketball","w":["Volleyball","Tennis","Handball"],"cat":"Sports"},{"q":"Which country is famous for the pyramids of Giza?","a":"Egypt","w":["Sudan","Iraq","Mexico"],"cat":"Geography"},{"q":"What is the process by which plants make food using sunlight?","a":"Photosynthesis","w":["Respiration","Digestion","Fermentation"],"cat":"Science"},{"q":"Which composer wrote the melody known as Ode to Joy?","a":"Ludwig van Beethoven","w":["Mozart","Bach","Chopin"],"cat":"Music"},{"q":"Which Shakespeare play features a Scottish lord and his ambitious wife?","a":"Macbeth","w":["Hamlet","Othello","King Lear"],"cat":"Literature"},{"q":"Which country hosted the 2016 Summer Olympics?","a":"Brazil","w":["China","United Kingdom","Japan"],"cat":"Sports"},{"q":"What is the capital of Egypt?","a":"Cairo","w":["Alexandria","Giza","Luxor"],"cat":"Geography"},{"q":"Which country is known as the Land of the Rising Sun?","a":"Japan","w":["China","Thailand","South Korea"],"cat":"Geography"},{"q":"What is the capital of Australia?","a":"Canberra","w":["Sydney","Melbourne","Perth"],"cat":"Geography"},{"q":"What is the capital of Brazil?","a":"Brasilia","w":["Rio de Janeiro","Sao Paulo","Salvador"],"cat":"Geography"},{"q":"Who painted The Starry Night?","a":"Vincent van Gogh","w":["Claude Monet","Pablo Picasso","Salvador Dali"],"cat":"Art"},{"q":"What is the currency of India?","a":"Rupee","w":["Taka","Rupiah","Ringgit"],"cat":"Geography"},{"q":"What is the largest species of big cat?","a":"Tiger","w":["Lion","Jaguar","Leopard"],"cat":"Nature"},{"q":"What is the shared currency used across much of the European Union?","a":"Euro","w":["Pound","Franc","Mark"],"cat":"Geography"},{"q":"In Greek mythology, who is the king of the gods?","a":"Zeus","w":["Poseidon","Hades","Apollo"],"cat":"Mythology"},{"q":"Who is commonly credited with inventing the telephone?","a":"Alexander Graham Bell","w":["Thomas Edison","Nikola Tesla","Guglielmo Marconi"],"cat":"History"},{"q":"Who was the British Prime Minister for most of World War II?","a":"Winston Churchill","w":["Neville Chamberlain","Clement Attlee","Anthony Eden"],"cat":"History"},{"q":"Who developed the theory of general relativity?","a":"Albert Einstein","w":["Isaac Newton","Niels Bohr","Galileo Galilei"],"cat":"Science"},{"q":"Who is credited as the author of The Odyssey?","a":"Homer","w":["Virgil","Sophocles","Plato"],"cat":"Literature"},{"q":"Which country straddles Europe and Asia and contains the city of Istanbul?","a":"Turkey","w":["Greece","Russia","Egypt"],"cat":"Geography"},{"q":"Which planet is closest in size to Earth?","a":"Venus","w":["Mars","Mercury","Neptune"],"cat":"Science"},{"q":"By the traditional measure, what is the longest river in the world?","a":"The Nile","w":["The Amazon","The Yangtze","The Mississippi"],"cat":"Geography"},{"q":"Who wrote The Adventures of Tom Sawyer?","a":"Mark Twain","w":["Herman Melville","Nathaniel Hawthorne","Jack London"],"cat":"Literature"},{"q":"Which element has the chemical symbol Fe?","a":"Iron","w":["Fluorine","Francium","Lead"],"cat":"Science"},{"q":"Which US president appears on the one-dollar bill?","a":"George Washington","w":["Abraham Lincoln","Thomas Jefferson","Benjamin Franklin"],"cat":"History"},{"q":"Who wrote Pride and Prejudice?","a":"Jane Austen","w":["Emily Bronte","Charlotte Bronte","George Eliot"],"cat":"Literature"},{"q":"Which country gifted the Statue of Liberty to the United States?","a":"France","w":["United Kingdom","Spain","Italy"],"cat":"History"},{"q":"Which metal is the best conductor of electricity?","a":"Silver","w":["Copper","Gold","Aluminum"],"cat":"Science"},{"q":"What is the largest island in the world?","a":"Greenland","w":["New Guinea","Borneo","Madagascar"],"cat":"Geography"},{"q":"In which country would you find the Great Barrier Reef?","a":"Australia","w":["Brazil","Thailand","Mexico"],"cat":"Geography"},{"q":"Which country is home to both the kangaroo and the koala?","a":"Australia","w":["New Zealand","South Africa","Argentina"],"cat":"Geography"},{"q":"Who directed the 1975 film Jaws?","a":"Steven Spielberg","w":["George Lucas","Martin Scorsese","Ridley Scott"],"cat":"Movies"},{"q":"Which gas makes up the majority of Earth's atmosphere?","a":"Nitrogen","w":["Oxygen","Carbon dioxide","Argon"],"cat":"Science"},{"q":"Which band released the album Abbey Road?","a":"The Beatles","w":["The Rolling Stones","The Who","Pink Floyd"],"cat":"Music"},{"q":"Which vitamin does the body produce when the skin is exposed to sunlight?","a":"Vitamin D","w":["Vitamin C","Vitamin A","Vitamin B12"],"cat":"Science"},{"q":"In what year did World War II end?","a":"1945","w":["1944","1946","1939"],"cat":"History"},{"q":"Who wrote the novel 1984?","a":"George Orwell","w":["Aldous Huxley","Ray Bradbury","H.G. Wells"],"cat":"Literature"},{"q":"What is the fastest bird in the world in a dive?","a":"Peregrine falcon","w":["Golden eagle","Swift","Albatross"],"cat":"Nature"},{"q":"In which country did tea originate?","a":"China","w":["India","Japan","England"],"cat":"Food"},{"q":"Which planet is sometimes called the Morning Star?","a":"Venus","w":["Mars","Mercury","Jupiter"],"cat":"Science"},{"q":"Who was the first person to walk on the Moon?","a":"Neil Armstrong","w":["Buzz Aldrin","Yuri Gagarin","Michael Collins"],"cat":"History"},{"q":"Who painted the Mona Lisa?","a":"Leonardo da Vinci","w":["Michelangelo","Raphael","Vincent van Gogh"],"cat":"Art"},{"q":"In which body of water can you float easily due to its extreme saltiness?","a":"The Dead Sea","w":["The Red Sea","The Black Sea","The Caspian Sea"],"cat":"Geography"},{"q":"Which artist recorded the 1982 album Thriller?","a":"Michael Jackson","w":["Prince","Stevie Wonder","Lionel Richie"],"cat":"Music"},{"q":"Who was the Greek god of the sea?","a":"Poseidon","w":["Zeus","Ares","Hermes"],"cat":"Mythology"},{"q":"What is the smallest country in the world by area?","a":"Vatican City","w":["Monaco","San Marino","Liechtenstein"],"cat":"Geography"},{"q":"What is the largest desert in the world?","a":"Antarctic Desert","w":["Sahara Desert","Arabian Desert","Gobi Desert"],"cat":"Geography"},{"q":"What is the tallest building in the world?","a":"Burj Khalifa","w":["Shanghai Tower","One World Trade Center","Taipei 101"],"cat":"Geography"},{"q":"In which country did the Olympic Games originate?","a":"Greece","w":["Italy","Egypt","Turkey"],"cat":"History"},{"q":"In which US city is the Statue of Liberty located?","a":"New York City","w":["Boston","Philadelphia","Washington, D.C."],"cat":"Geography"},{"q":"What is the chemical symbol for sodium?","a":"Na","w":["So","Sd","S"],"cat":"Science"}],"hard":[{"q":"In what year did the Berlin Wall fall?","a":"1989","w":["1987","1991","1985"],"cat":"History"},{"q":"What is the most abundant element in the universe?","a":"Hydrogen","w":["Helium","Oxygen","Carbon"],"cat":"Science"},{"q":"Which planet has the shortest day, rotating in about 10 hours?","a":"Jupiter","w":["Earth","Mars","Neptune"],"cat":"Science"},{"q":"What is the value of pi rounded to two decimal places?","a":"3.14","w":["3.12","3.16","3.41"],"cat":"Mathematics"},{"q":"In Greek mythology, who flew too close to the Sun on wax wings?","a":"Icarus","w":["Daedalus","Perseus","Theseus"],"cat":"Mythology"},{"q":"Who wrote Crime and Punishment?","a":"Fyodor Dostoevsky","w":["Leo Tolstoy","Nikolai Gogol","Boris Pasternak"],"cat":"Literature"},{"q":"Who composed the opera The Marriage of Figaro?","a":"Wolfgang Amadeus Mozart","w":["Ludwig van Beethoven","Giuseppe Verdi","Richard Wagner"],"cat":"Music"},{"q":"Which gas is chiefly responsible for the intense greenhouse effect on Venus?","a":"Carbon dioxide","w":["Methane","Oxygen","Nitrogen"],"cat":"Science"},{"q":"What is the currency of South Korea?","a":"Won","w":["Yen","Yuan","Baht"],"cat":"Geography"},{"q":"Which scientist formulated the three laws of motion?","a":"Isaac Newton","w":["Albert Einstein","Galileo Galilei","Johannes Kepler"],"cat":"Science"},{"q":"Who wrote the novel War and Peace?","a":"Leo Tolstoy","w":["Fyodor Dostoevsky","Anton Chekhov","Ivan Turgenev"],"cat":"Literature"},{"q":"What is the capital of New Zealand?","a":"Wellington","w":["Auckland","Christchurch","Hamilton"],"cat":"Geography"},{"q":"What is the chemical symbol for the element tungsten?","a":"W","w":["Tu","Tg","Tn"],"cat":"Science"},{"q":"What is the largest internal organ in the human body?","a":"Liver","w":["Brain","Lungs","Stomach"],"cat":"Science"},{"q":"Which Wonder of the Ancient World stood in the harbor of Alexandria?","a":"The Lighthouse of Alexandria","w":["The Hanging Gardens","The Colossus of Rhodes","The Great Pyramid"],"cat":"History"},{"q":"What is the square root of 144?","a":"12","w":["14","16","11"],"cat":"Mathematics"},{"q":"What is the capital of Mongolia?","a":"Ulaanbaatar","w":["Astana","Tashkent","Bishkek"],"cat":"Geography"},{"q":"Which painter famously cut off part of his own ear?","a":"Vincent van Gogh","w":["Paul Gauguin","Edgar Degas","Edouard Manet"],"cat":"Art"},{"q":"Which part of the cell is known as its powerhouse?","a":"Mitochondria","w":["Nucleus","Ribosome","Golgi apparatus"],"cat":"Science"},{"q":"What is the longest bone in the human body?","a":"Femur","w":["Tibia","Humerus","Fibula"],"cat":"Science"},{"q":"Which country has the longest coastline in the world?","a":"Canada","w":["Russia","Australia","Indonesia"],"cat":"Geography"},{"q":"Who wrote the Divine Comedy?","a":"Dante Alighieri","w":["Geoffrey Chaucer","Petrarch","Boccaccio"],"cat":"Literature"},{"q":"In which year did the United States declare independence?","a":"1776","w":["1775","1789","1812"],"cat":"History"},{"q":"Who painted the ceiling of the Sistine Chapel?","a":"Michelangelo","w":["Leonardo da Vinci","Raphael","Botticelli"],"cat":"Art"},{"q":"In what year did the Titanic sink?","a":"1912","w":["1905","1918","1920"],"cat":"History"},{"q":"Which element has the atomic number 1?","a":"Hydrogen","w":["Helium","Oxygen","Carbon"],"cat":"Science"},{"q":"What is the chemical symbol for potassium?","a":"K","w":["P","Po","Pt"],"cat":"Science"},{"q":"Who was the first Emperor of Rome?","a":"Augustus","w":["Julius Caesar","Nero","Caligula"],"cat":"History"},{"q":"How many lines are there on a standard musical staff?","a":"Five","w":["Four","Six","Seven"],"cat":"Music"},{"q":"What is the smallest prime number?","a":"2","w":["1","3","0"],"cat":"Mathematics"}]};
 
-/* Load the shared archive (every day's questions). Falls back to null. */
-async function loadArchive(){
-  try{
-    const r=await fetch("./archive.json?ts="+Date.now(),{cache:"no-store"});
-    if(r.ok){ const j=await r.json();
-      if(j && j.days && Object.keys(j.days).length) return j.days;
-    }
-  }catch(e){}
-  return null;
+/* one question -> playable shape (choice order randomized per view) */
+const toQ = (it, diff) => ({ q:it.q, correct:it.a, choices:shuffle([it.a].concat(it.w)), cat:it.cat, difficulty:diff });
+/* deterministic window into a difficulty pool for a given day number */
+function windowPick(arr, count, mult, dayNum){
+  const out=[], start=((dayNum*mult)%arr.length + arr.length)%arr.length;
+  for(let i=0;i<count;i++) out.push(arr[(start+i)%arr.length]);
+  return out;
+}
+/* the 6-question set for a given day number: 3 easy, 2 medium, 1 hard */
+function daySet(dayNum){
+  return windowPick(BANK.easy,3,3,dayNum).map(x=>toQ(x,"easy"))
+    .concat(windowPick(BANK.medium,2,2,dayNum).map(x=>toQ(x,"medium")))
+    .concat(windowPick(BANK.hard,1,1,dayNum).map(x=>toQ(x,"hard")));
+}
+/* a random extra set (not tied to the calendar) */
+function practiceSet(){
+  const r=(arr,n)=>shuffle(arr).slice(0,n);
+  return r(BANK.easy,3).map(x=>toQ(x,"easy"))
+    .concat(r(BANK.medium,2).map(x=>toQ(x,"medium")))
+    .concat(r(BANK.hard,1).map(x=>toQ(x,"hard")));
 }
 
 /* =========================================================================
@@ -562,7 +533,6 @@ function advanceTrans(){ if(transTimer){ clearTimeout(transTimer); transTimer=nu
 /* =========================================================================
    Results
    ========================================================================= */
-const fmtShort = id => parseYmd(id).toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
 function currentStreak(){
   let d=parseYmd(latestDayId||todayKey);
   if(!(store.days[ymd(d)] && store.days[ymd(d)].done)) d.setDate(d.getDate()-1);
@@ -598,12 +568,10 @@ function showResults(rec, daily){
   const actions=el("rActions"); actions.innerHTML="";
   const shareBtn=make("button","btn primary","SHARE YOUR GAINS");
   shareBtn.onclick=()=>shareResult(g,t,rec.results,shareBtn); actions.appendChild(shareBtn);
-  if(Object.keys(archiveDays).length){
-    const pastBtn=make("button","btn ghost","PAST DAYS"); pastBtn.onclick=openArchive; actions.appendChild(pastBtn);
-  }
+  const pastBtn=make("button","btn ghost","PAST DAYS"); pastBtn.onclick=openArchive; actions.appendChild(pastBtn);
   const practiceBtn=make("button","btn ghost","EXTRA SET"); practiceBtn.onclick=startPractice; actions.appendChild(practiceBtn);
   const cd=el("rCountdown");
-  if(daily && isToday && !sharedMode){
+  if(daily && isToday){
     cd.style.display="";
     if(countdownTimer) clearInterval(countdownTimer);
     const tick=()=>{ const mid=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1,0,0,0);
@@ -612,37 +580,32 @@ function showResults(rec, daily){
       const m=String(Math.floor(s/60)).padStart(2,"0"), ss=String(s%60).padStart(2,"0");
       cd.innerHTML="Next brain day in <b>"+h+":"+m+":"+ss+"</b>"; };
     tick(); countdownTimer=setInterval(tick,1000);
-  } else if(daily && isToday){ cd.style.display=""; cd.innerHTML="New brain day drops daily \u2014 come back tomorrow."; }
-  else cd.style.display="none";
+  } else cd.style.display="none";
   show("s-result");
 }
 
 /* ---------- archive (play days you missed) ---------- */
 function openArchive(){
   const list=el("archiveList"); list.innerHTML="";
-  const dates=Object.keys(archiveDays).sort().reverse();
-  if(!dates.length){
-    list.innerHTML='<p class="archive-empty">Past days show up here once your daily archive has a few entries.</p>';
-  } else {
-    dates.forEach(d=>{
-      const rec=store.days[d];
-      const row=make("button","archive-row");
-      row.appendChild(make("div","ar-date", fmtShort(d) + (d===latestDayId?"  \u00b7 today":"")));
-      const right=make("div","ar-status");
-      if(rec && rec.done){ right.textContent=rec.score+"/"+rec.total+" \u2713"; right.classList.add("done"); }
-      else { right.textContent="Play \u203A"; }
-      row.appendChild(right);
-      row.onclick=()=>playDay(d);
-      list.appendChild(row);
-    });
+  const startNum=dayNumOf(ARCHIVE_START), todayNum=dayNumOf(todayKey);
+  const from=todayNum, to=Math.max(startNum, todayNum-(ARCHIVE_MAX_ROWS-1));
+  for(let n=from; n>=to; n--){
+    const d=dayIdOf(n), rec=store.days[d];
+    const row=make("button","archive-row");
+    row.appendChild(make("div","ar-date", fmtShort(d) + (d===todayKey?"  \u00b7 today":"")));
+    const right=make("div","ar-status");
+    if(rec && rec.done){ right.textContent=rec.score+"/"+rec.total+" \u2713"; right.classList.add("done"); }
+    else { right.textContent=(d===todayKey?"Play \u203A":"Play \u203A"); }
+    row.appendChild(right);
+    row.onclick=()=>playDay(d);
+    list.appendChild(row);
   }
   show("s-archive");
 }
 function playDay(d){
   currentDayId=d;
   if(store.days[d] && store.days[d].done){ showResults(store.days[d], true); return; }
-  const day=archiveDays[d]; if(!day) return;
-  beginRound(normalize(day.results), true);
+  beginRound(daySet(dayNumOf(d)), true);
 }
 function backToToday(){
   currentDayId=latestDayId;
@@ -661,33 +624,17 @@ async function shareResult(g,t,res,btn){
 /* =========================================================================
    Flows
    ========================================================================= */
-const LOADING=["Warming up\u2026","Chalking up\u2026","Racking the weights\u2026","Stretching first\u2026","Loading the reps\u2026"];
-function loadingMsg(){ el("loadingMsg").textContent=pick(LOADING); el("loadIll").innerHTML=illWarm(); }
 let lastFlow=null;
-async function startDaily(){
-  lastFlow=startDaily; loadingMsg(); show("s-loading");
-  try{
-    const days=await loadArchive();
-    if(days){
-      archiveDays=days; sharedMode=true;
-      const dates=Object.keys(days).sort();
-      latestDayId=dates[dates.length-1]; currentDayId=latestDayId;
-      if(store.days[latestDayId] && store.days[latestDayId].done){ showResults(store.days[latestDayId],true); return; }
-      beginRound(normalize(days[latestDayId].results), true); return;
-    }
-    // Fallback: per-person daily (3 easy / 2 medium / 1 hard), cached for the day
-    archiveDays={}; sharedMode=false; latestDayId=todayKey; currentDayId=todayKey;
-    if(store.days[todayKey] && store.days[todayKey].done){ showResults(store.days[todayKey],true); return; }
-    if(store.cache && store.cache.date===todayKey && Array.isArray(store.cache.q) && store.cache.q.length){ beginRound(store.cache.q,true); return; }
-    const qs=normalize(await fetchMix()); if(!qs.length) throw new Error("empty");
-    store.cache={date:todayKey,q:qs}; save();
-    beginRound(qs,true);
-  }catch(e){ showError(); }
+function startDaily(){
+  lastFlow=startDaily;
+  latestDayId=todayKey; currentDayId=todayKey;
+  if(store.days[todayKey] && store.days[todayKey].done){ showResults(store.days[todayKey],true); return; }
+  beginRound(daySet(dayNumOf(todayKey)), true);
 }
-async function startPractice(){
-  lastFlow=startPractice; loadingMsg(); show("s-loading");
-  try{ beginRound(await getQuestions(PRACTICE_COUNT), false); }
-  catch(e){ showError(); }
+function startPractice(){
+  lastFlow=startPractice;
+  currentDayId=latestDayId;
+  beginRound(practiceSet(), false);
 }
 function retry(){ (lastFlow||startDaily)(); }
 function showError(){
